@@ -60,9 +60,9 @@ public:
     }
 
     bool decodeRegion(SkBitmap* bitmap, const SkIRect& rect,
-                      SkBitmap::Config pref, int sampleSize) {
+                      SkColorType pref, int sampleSize) {
         fDecoder->setSampleSize(sampleSize);
-        return fDecoder->decodeRegion(bitmap, rect, pref);
+        return fDecoder->decodeSubset(bitmap, rect, pref);
     }
 
     SkImageDecoder* getDecoder() const { return fDecoder; }
@@ -101,13 +101,13 @@ static jobject createBitmapRegionDecoder(JNIEnv* env, SkStreamRewindable* stream
 }
 
 static jobject nativeNewInstanceFromByteArray(JNIEnv* env, jobject, jbyteArray byteArray,
-                                     int offset, int length, jboolean isShareable) {
+                                     jint offset, jint length, jboolean isShareable) {
     /*  If isShareable we could decide to just wrap the java array and
         share it, but that means adding a globalref to the java array object
         For now we just always copy the array's data if isShareable.
      */
     AutoJavaByteArray ar(env, byteArray);
-    SkStreamRewindable* stream = new SkMemoryStream(ar.ptr() + offset, length, true);
+    SkMemoryStream* stream = new SkMemoryStream(ar.ptr() + offset, length, true);
 
     jobject brd = createBitmapRegionDecoder(env, stream);
     SkSafeUnref(stream); // the decoder now holds a reference
@@ -150,7 +150,7 @@ static jobject nativeNewInstanceFromStream(JNIEnv* env, jobject clazz,
 }
 
 static jobject nativeNewInstanceFromAsset(JNIEnv* env, jobject clazz,
-                                 jint native_asset, // Asset
+                                 jlong native_asset, // Asset
                                  jboolean isShareable) {
     Asset* asset = reinterpret_cast<Asset*>(native_asset);
     SkAutoTUnref<SkMemoryStream> stream(CopyAssetToStream(asset));
@@ -169,12 +169,13 @@ static jobject nativeNewInstanceFromAsset(JNIEnv* env, jobject clazz,
  * purgeable not supported
  * reportSizeToVM not supported
  */
-static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd,
-                                int start_x, int start_y, int width, int height, jobject options) {
+static jobject nativeDecodeRegion(JNIEnv* env, jobject, jlong brdHandle,
+                                jint start_x, jint start_y, jint width, jint height, jobject options) {
+    SkBitmapRegionDecoder *brd = reinterpret_cast<SkBitmapRegionDecoder*>(brdHandle);
     jobject tileBitmap = NULL;
     SkImageDecoder *decoder = brd->getDecoder();
     int sampleSize = 1;
-    SkBitmap::Config prefConfig = SkBitmap::kNo_Config;
+    SkColorType prefColorType = kUnknown_SkColorType;
     bool doDither = true;
     bool preferQualityOverSpeed = false;
     bool requireUnpremultiplied = false;
@@ -187,7 +188,7 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
         env->SetObjectField(options, gOptions_mimeFieldID, 0);
 
         jobject jconfig = env->GetObjectField(options, gOptions_configFieldID);
-        prefConfig = GraphicsJNI::getNativeBitmapConfig(env, jconfig);
+        prefColorType = GraphicsJNI::getNativeBitmapColorType(env, jconfig);
         doDither = env->GetBooleanField(options, gOptions_ditherFieldID);
         preferQualityOverSpeed = env->GetBooleanField(options,
                 gOptions_preferQualityOverSpeedFieldID);
@@ -225,7 +226,7 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
         adb.reset(bitmap);
     }
 
-    if (!brd->decodeRegion(bitmap, region, prefConfig, sampleSize)) {
+    if (!brd->decodeRegion(bitmap, region, prefColorType, sampleSize)) {
         return nullObjectReturn("decoder->decodeRegion returned false");
     }
 
@@ -255,15 +256,18 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
     return GraphicsJNI::createBitmap(env, bitmap, buff, bitmapCreateFlags, NULL, NULL, -1);
 }
 
-static int nativeGetHeight(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd) {
-    return brd->getHeight();
+static jint nativeGetHeight(JNIEnv* env, jobject, jlong brdHandle) {
+    SkBitmapRegionDecoder *brd = reinterpret_cast<SkBitmapRegionDecoder*>(brdHandle);
+    return static_cast<jint>(brd->getHeight());
 }
 
-static int nativeGetWidth(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd) {
-    return brd->getWidth();
+static jint nativeGetWidth(JNIEnv* env, jobject, jlong brdHandle) {
+    SkBitmapRegionDecoder *brd = reinterpret_cast<SkBitmapRegionDecoder*>(brdHandle);
+    return static_cast<jint>(brd->getWidth());
 }
 
-static void nativeClean(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd) {
+static void nativeClean(JNIEnv* env, jobject, jlong brdHandle) {
+    SkBitmapRegionDecoder *brd = reinterpret_cast<SkBitmapRegionDecoder*>(brdHandle);
     delete brd;
 }
 
@@ -273,14 +277,14 @@ static void nativeClean(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd) {
 
 static JNINativeMethod gBitmapRegionDecoderMethods[] = {
     {   "nativeDecodeRegion",
-        "(IIIIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;",
+        "(JIIIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;",
         (void*)nativeDecodeRegion},
 
-    {   "nativeGetHeight", "(I)I", (void*)nativeGetHeight},
+    {   "nativeGetHeight", "(J)I", (void*)nativeGetHeight},
 
-    {   "nativeGetWidth", "(I)I", (void*)nativeGetWidth},
+    {   "nativeGetWidth", "(J)I", (void*)nativeGetWidth},
 
-    {   "nativeClean", "(I)V", (void*)nativeClean},
+    {   "nativeClean", "(J)V", (void*)nativeClean},
 
     {   "nativeNewInstance",
         "([BIIZ)Landroid/graphics/BitmapRegionDecoder;",
@@ -298,7 +302,7 @@ static JNINativeMethod gBitmapRegionDecoderMethods[] = {
     },
 
     {   "nativeNewInstance",
-        "(IZ)Landroid/graphics/BitmapRegionDecoder;",
+        "(JZ)Landroid/graphics/BitmapRegionDecoder;",
         (void*)nativeNewInstanceFromAsset
     },
 };
